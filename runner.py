@@ -27,7 +27,8 @@ def discover_page(url):
         root = urlsplit(url).hostname
         return [urlunsplit((p.scheme, p.netloc, p.path, '', ''))
                 for href in parser.urls for p in [urlsplit(urljoin(url, href))]
-                if p.scheme == 'https' and p.hostname == root and not p.username and not p.port]
+                if p.scheme == 'https' and p.hostname == root and not p.username and not p.port
+                and 'pokemon' in p.path.lower() and not p.path.startswith(('/en/', '/sk/'))]
     except Exception as e:
         print('Discovery failed:', urlsplit(url).hostname, type(e).__name__)
         return []

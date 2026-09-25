@@ -83,6 +83,56 @@ class JSONLD(HTMLParser):
                 pass
 
 
+class Microdata(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_h1 = False
+        self.names = []
+        self.props = {}
+        self.name = ''
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'h1':
+            self.in_h1 = True
+            self.name = ''
+        prop = attrs.get('itemprop')
+        if prop in ('price', 'priceCurrency', 'availability', 'itemCondition'):
+            value = attrs.get('content', attrs.get('href'))
+            if value is not None:
+                self.props.setdefault(prop, set()).add(value)
+
+    def handle_endtag(self, tag):
+        if tag == 'h1' and self.in_h1:
+            self.in_h1 = False
+            self.names.append(' '.join(self.name.split()))
+
+    def handle_data(self, data):
+        if self.in_h1:
+            self.name += data
+
+
+def micro_offer(html):
+    p = Microdata()
+    p.feed(html)
+    if len(p.names) != 1 or not matches(p.names[0]):
+        raise ValueError('Not a matching product detail')
+    if 'Produkt aktuálně nelze zakoupit' in html:
+        return p.names[0], None, 'OutOfStock'
+    if any(len(p.props.get(k, [])) != 1 for k in ('price', 'priceCurrency', 'availability')):
+        raise ValueError('Ambiguous microdata')
+    if p.props['priceCurrency'] != {'CZK'}:
+        raise ValueError('Wrong currency')
+    conditions = p.props.get('itemCondition', {'https://schema.org/NewCondition'})
+    if any(v.rsplit('/', 1)[-1] != 'NewCondition' for v in conditions):
+        raise ValueError('Not new')
+    price = Decimal(next(iter(p.props['price'])))
+    status = next(iter(p.props['availability'])).rsplit('/', 1)[-1]
+    if not price.is_finite() or price <= 0 or status not in ('InStock', 'OutOfStock', 'PreOrder', 'PreSale', 'BackOrder', 'SoldOut', 'Discontinued'):
+        raise ValueError('Invalid price or status')
+    return p.names[0], price, status
+
+
 def nodes(value):
     if isinstance(value, dict):
         yield value
@@ -123,7 +173,9 @@ def offer_from_html(html):
     # Ambiguous pages containing several products/offers need a shop-specific adapter.
     unique = set(found)
     if len(unique) != 1:
-        raise ValueError('Missing or ambiguous product data; adapter required')
+        if unique:
+            raise ValueError('Ambiguous product data')
+        return micro_offer(html)
     return unique.pop()
 
 
@@ -139,4 +191,3 @@ def should_notify(previous, price, stock):
     eligible = stock in ('InStock', 'PreOrder', 'PreSale') and price < LIMIT
     return eligible and (previous is None or not previous[0] or
                          stock != previous[2] or price < Decimal(previous[1]))
-
